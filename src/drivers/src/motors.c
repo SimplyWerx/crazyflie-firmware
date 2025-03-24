@@ -484,12 +484,28 @@ void motorsBurstDshot()
 }
 #endif
 
+#define THRUST_SCALE_FACTOR 1 // comment out to turn of thrust scaling
+// Define the default thrust scaling factor
+static float thrustScaleFactor = 0.3f;  // Default value
 
 // Ithrust is thrust mapped for 65536 <==> 60 grams
 void motorsSetRatio(uint32_t id, uint16_t ithrust)
 {
   if (isInit) {
     ASSERT(id < NBR_OF_MOTORS);
+
+#ifdef THRUST_SCALE_FACTOR
+    // Scale the thrust value
+    float scaled_thrust = ithrust * thrustScaleFactor;
+
+    // Ensure the scaled thrust is within valid range
+    if (scaled_thrust > UINT16_MAX) {
+        scaled_thrust = UINT16_MAX;
+    } else if (scaled_thrust < 0) {
+        scaled_thrust = 0;
+    }    
+    ithrust = (uint16_t)scaled_thrust;
+#endif
 
     uint16_t ratio = ithrust;
 
@@ -708,6 +724,20 @@ void __attribute__((used)) DMA1_Stream7_IRQHandler(void)  // M2
 }
 #endif
 
+
+#ifdef THRUST_SCALE_FACTOR
+/**
+ * Thrust scaling factor parameter group
+ */
+PARAM_GROUP_START(thrust)
+
+/**
+ * @brief Thrust scaling factor 0.0 to 1.0
+ */
+PARAM_ADD_CORE(PARAM_FLOAT, scaleFactor, &thrustScaleFactor)
+
+PARAM_GROUP_STOP(thrust)
+#endif
 
 /**
  * Override power distribution to motors.
