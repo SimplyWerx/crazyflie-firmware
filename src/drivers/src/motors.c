@@ -484,9 +484,11 @@ void motorsBurstDshot()
 }
 #endif
 
-#define THRUST_SCALE_FACTOR 1 // comment out to turn of thrust scaling
+//#define THRUST_SCALE_FACTOR 1 // comment out to turn of thrust scaling
+#ifdef THRUST_SCALE_FACTOR
 // Define the default thrust scaling factor
 static float thrustScaleFactor = 0.3f;  // Default value
+#endif
 
 // Ithrust is thrust mapped for 65536 <==> 60 grams
 void motorsSetRatio(uint32_t id, uint16_t ithrust)
