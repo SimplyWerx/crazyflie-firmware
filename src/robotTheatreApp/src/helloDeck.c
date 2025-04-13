@@ -3,7 +3,7 @@
 
 #include "deck.h"
 
-#include "hello.h"
+#include "helloDeck.h"
 
 bool isFlyMode(void) {
   return digitalRead(DECK_GPIO_IO4) == LOW;

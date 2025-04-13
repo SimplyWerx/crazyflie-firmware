@@ -1,1 +1,2 @@
-obj-y += hello_world.o
+obj-y += autoHover.o
+obj-y += helloDeck.o
