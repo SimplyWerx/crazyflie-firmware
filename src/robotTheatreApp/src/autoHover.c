@@ -8,7 +8,7 @@
 
 #include "log.h"
 #include "param.h"
-
+#include "supervisor.h"
 #include "commander.h"
 
 #include "helloDeck.h"
@@ -25,6 +25,14 @@
 9. Wait then set thrust to zero.
 10. Disarm.
 
+1. check that all systems go: battery level is nominal and initial roll and pitch are flat surface.
+2. Arm
+3. Start minimum thrust e.g. 10%. Then slowly increase thrust up to 28%. 
+4. Maintain this thrust level for a while (e.g. 5 seconds).
+5. Decrease thrust slowly until thrust is below the minimum e.g. 10%
+6. Wait then set thrust to zero.
+7. Disarm.
+
 NOTES:
 - commanderSetSetpoint() must be sent within every COMMANDER_WDT_TIMEOUT_STABILIZE (500ms)
 - for steps 3-8, each step needs a timeout. If timeout is reached, we need to go to the next step.
@@ -32,10 +40,12 @@ NOTES:
 
 #define COMMANDER_INTERVAL_MS 50 // 10ms to 50ms. must be less than COMMANDER_WDT_TIMEOUT_STABILIZE.
 
-#define MIN_THRUST_PERCENT 0.1f // 10% of full thrust. This thrust MUST be less than lift off thrust
+#define INCREMENT_THRUST_PERCENT 0.0005f; //0.001f // increment per interval
 
-#define MAX_THRUST_PERCENT 0.28f // 28% of full thrust. 
-
+#define MIN_THRUST_PERCENT 0.2f // This thrust MUST be MORE than lift off thrust. To achieve minimal hover.
+                                // need to hover (clear surface) in order for the stabilization to work
+#define MAX_THRUST_PERCENT 0.28f //0.28f // 28% of full thrust. 
+/*
 static bool detectLiftOff() {
   logVarId_t idHeightEstimate = logGetVarId("stateEstimate", "z");
   logVarId_t idVelocityZ = logGetVarId("stateEstimate", "vz");
@@ -54,54 +64,96 @@ static bool detectLiftOff() {
   }
   return false;
 }
+*/
 
 // we have no position info available. we can only control attitude and thrust.
 // so all position modes are set to modeDisabled.
 // percentThrust is 0.0f to 1.0f, where 1.0f is 100% thrust
-static void setVelocitySetpoint(setpoint_t *setpoint, float percentThrust)
+static void setThrustSetpoint(setpoint_t *setpoint, float percentThrust)
 {
   setpoint->mode.x = modeDisable;
   setpoint->mode.y = modeDisable;
   setpoint->mode.z = modeDisable;
-
-  setpoint->mode.roll = modeAbs;
-  setpoint->mode.pitch = modeAbs;
-  setpoint->mode.yaw = modeDisable; // we disable yaw control because we don't care
-
+  setpoint->mode.roll = modeAbs; //modeVelocity; 
   setpoint->attitude.roll = 0.0f;
+  //setpoint->attitudeRate.roll = 0.0f; 
+  setpoint->mode.pitch = modeAbs; //modeVelocity; 
   setpoint->attitude.pitch = 0.0f;
+  //setpoint->attitudeRate.pitch = 0.0f;
+  setpoint->mode.yaw = modeVelocity;
+  setpoint->attitudeRate.yaw = 0.0f; // we disable yaw control because we don't care
   
   if(percentThrust > MAX_THRUST_PERCENT) {
     percentThrust = MAX_THRUST_PERCENT;
-  } else if(percentThrust < MIN_THRUST_PERCENT) {
-    percentThrust = MIN_THRUST_PERCENT;    
+  } else if(percentThrust < 0.0f) {
+    percentThrust = 0.0f;    
   }
-  setpoint->thrust = percentThrust * UINT16_MAX;
-
+  setpoint->thrust = percentThrust* UINT16_MAX; 
 }
 
 void appMain() {
     DEBUG_PRINT("Waiting for activation ...\n");
-    vTaskDelay(M2T(2000)); // wait for power up stabilization
+    vTaskDelay(M2T(3000)); // wait for power up stabilization
     offErrorLed(); // turn off error LED
 
+    /*
     // Getting the Logging IDs of the state estimates
     logVarId_t idHeightEstimate = logGetVarId("stateEstimate", "z");
     if (idHeightEstimate == -1) {
       DEBUG_PRINT("Failed to get log variable for altitude!\n");
       return;
     }
-
-    // get roll and pitch. make sure they are close to 0.0f otherwise return.
-
-    while(1) {
-      vTaskDelay(M2T(2000));
-      float altitude = logGetFloat(idHeightEstimate);
-      DEBUG_PRINT("Altitude: %f\n", altitude);
-      onErrorLed(); // turn on error LED
-      vTaskDelay(M2T(2000)); 
-      offErrorLed(); // turn off error LED
+    logVarId_t idVelocityZ = logGetVarId("stateEstimate", "vz");
+    if (idVelocityZ == -1) {
+      DEBUG_PRINT("Failed to get log variable for velocity!\n");
+      return;
     }
+
+    surfaceAltitude = logGetFloat(idHeightEstimate); // get the altitude of the surface we are hovering over.
+    // get roll and pitch. make sure they are close to 0.0f otherwise return.
+    */
+       
+    if(!isFlyMode()) return;
+
+    supervisorRequestArming(true); // request arming
+    vTaskDelay(M2T(200)); 
+    
+    setpoint_t setpoint = {0};
+    float curThrust = MIN_THRUST_PERCENT; // start with minimum thrust
+    setThrustSetpoint(&setpoint, curThrust);
+    commanderSetSetpoint(&setpoint, COMMANDER_PRIORITY_EXTRX); // set the thrust to the minimum thrust
+    vTaskDelay(M2T(COMMANDER_INTERVAL_MS)); // wait for the next interval
+    
+    while(curThrust < MAX_THRUST_PERCENT) {
+      // increase thrust
+      curThrust += INCREMENT_THRUST_PERCENT; // increment thrust
+      setThrustSetpoint(&setpoint, curThrust);
+      commanderSetSetpoint(&setpoint, COMMANDER_PRIORITY_EXTRX); // set the thrust to the minimum thrust
+      vTaskDelay(M2T(COMMANDER_INTERVAL_MS)); // wait for the next interval
+    }
+    
+    for(int i = 0; i < 100; i++) { // stay here about 5 sec
+      commanderSetSetpoint(&setpoint, COMMANDER_PRIORITY_EXTRX); // set the thrust to the minimum thrust
+      vTaskDelay(M2T(COMMANDER_INTERVAL_MS)); // wait for the next interval
+    }
+    
+    while(curThrust > 0.0f) {
+      // decrease thrust
+      curThrust -= INCREMENT_THRUST_PERCENT; // increment thrust
+      setThrustSetpoint(&setpoint, curThrust);
+      commanderSetSetpoint(&setpoint, COMMANDER_PRIORITY_EXTRX); // set the thrust to the minimum thrust
+      vTaskDelay(M2T(COMMANDER_INTERVAL_MS)); // wait for the next interval
+    }
+    
+    setThrustSetpoint(&setpoint, 0.0f);
+    commanderSetSetpoint(&setpoint, COMMANDER_PRIORITY_EXTRX); // set the thrust to the minimum thrust
+    
+    // flight landed
+    while (1) {
+        commanderSetSetpoint(&setpoint, COMMANDER_PRIORITY_EXTRX);
+        vTaskDelay(M2T(COMMANDER_INTERVAL_MS)); // Send setpoint every 100 ms
+    }
+
 }
 
   
